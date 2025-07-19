@@ -55,8 +55,9 @@ class Payment(TypedDict):
 
 
 encoder = msgspec.json.Encoder()
-paymentDecoder = msgspec.json.Decoder(PaymentRequest)
-datetimeDecoder = msgspec.json.Decoder(datetime)
+payment_decoder = msgspec.json.Decoder(PaymentRequest)
+datetime_decoder = msgspec.json.Decoder(datetime)
+session = None
 
 payment_queue = asyncio.Queue()
 workers = []
@@ -64,10 +65,12 @@ workers = []
 
 async def register_payment_db(payment: Payment):
     key = f"payment:{payment['correlation_id']}"
-    value = json.dumps(payment)  # noqa: F821
-    await redis_client.set(key, value)
-    await redis_client.zadd("payments_index", {payment["requested_at"]: datetime.fromisoformat(payment["requested_at"]).timestamp()})
-    await redis_client.rpush(f"payments:{payment['payment_processor']}", value)
+    value = encoder.encode(payment)
+    async with redis_client.pipeline() as pipe:
+        await pipe.set(key, value)
+        await pipe.zadd("payments_index", {payment["requested_at"]: datetime.fromisoformat(payment["requested_at"]).timestamp()})
+        await pipe.rpush(f"payments:{payment['payment_processor']}", value)
+        await pipe.execute()
     logging.info(
         f"Payment registered: {payment['correlation_id']} - {payment['amount']} using {payment['payment_processor']}"
     )
@@ -83,7 +86,7 @@ async def get_payments_summary(from_date: datetime, to_date: datetime) -> Paymen
         count = 0
         for p in payments:
             try:
-                payment = json.loads(p)
+                payment = msgspec.json.decode(p)
                 ts = datetime.fromisoformat(payment["requested_at"]).timestamp()
                 if from_ts <= ts <= to_ts:
                     total_amount += payment["amount"]
@@ -108,15 +111,14 @@ async def make_payment_request(payment_payload, max_attempts=10) -> str:
         (f"{fallback_payment_processor_url}/payments", "fallback"),
     ]
     attempt = 0
-    async with aiohttp.ClientSession() as session:
-        while attempt < max_attempts:
-            url, processor = urls[attempt % 2]
-            logging.info(f"Attempt {attempt + 1}: Sending payment request to {url}")
-            async with session.post(url, json=payment_payload) as response:
-                if response.status == 200:
-                    logging.info(f"Payment request successful: {await response.json()}")
-                    return processor
-                attempt += 1
+    while attempt < max_attempts:
+        url, processor = urls[attempt % 2]
+        logging.info(f"Attempt {attempt + 1}: Sending payment request to {url}")
+        async with session.post(url, json=payment_payload) as response:
+            if response.status == 200:
+                logging.info(f"Payment request successful: {await response.json()}")
+                return processor
+            attempt += 1
     raise Exception("Both payment processors failed after multiple attempts.")
 
 
@@ -145,6 +147,8 @@ async def payment_worker():
 
 @contextlib.asynccontextmanager
 async def lifespan(app):
+    global session
+    session = aiohttp.ClientSession()
     num_workers = 20
     tasks = [asyncio.create_task(payment_worker()) for _ in range(num_workers)]
     app.state.worker_tasks = tasks
@@ -152,12 +156,14 @@ async def lifespan(app):
     for _ in tasks:
         await payment_queue.put(None)
     await asyncio.gather(*tasks)
+    if session:
+        await session.close()
 
 
 async def payments(request):
     try:
-        paymentBody = await request.body()
-        payment = paymentDecoder.decode(paymentBody)
+        payment_body = await request.body()
+        payment = payment_decoder.decode(payment_body)
         await payment_queue.put(payment)
     except msgspec.ValidationError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
