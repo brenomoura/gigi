@@ -13,15 +13,38 @@ services:
     networks:
       - payment-processor
       - rinha-net
+    depends_on:
+      - redis
     deploy:
       resources:
         limits:
-          cpus: "0.65"
-          memory: "167MB"
+          cpus: "0.50"
+          memory: "147MB"
 
   api02:
     <<: *api
     hostname: api02
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    networks:
+      - payment-processor
+      - rinha-net
+    volumes:
+      - redis_data:/data
+    command: >
+      redis-server
+      --appendonly yes
+      --save ""
+      --appendfsync everysec
+    deploy:
+      resources:
+        limits:
+          cpus: "0.4"
+          memory: "30MB"
 
   lb:
     image: nginx:1.27.0-alpine
@@ -38,11 +61,12 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.2"
-          memory: "15MB"
+          cpus: "0.1"
+          memory: "25MB"
 
 volumes:
   gigi-db:
+  redis_data:
 
 networks:
   payment-processor:

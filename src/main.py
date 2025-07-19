@@ -1,8 +1,9 @@
 import asyncio
 import contextlib
+import json
 import logging
 import os
-import sqlite3
+import redis.asyncio as redis
 from datetime import datetime, timedelta, timezone
 from typing import TypedDict
 
@@ -17,6 +18,8 @@ logging.basicConfig(
     level=logging.INFO,  # Ou DEBUG, WARNING, ERROR
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
+
+redis_client = redis.Redis(host="redis", port=6379, decode_responses=True)
 
 load_dotenv()
 payment_processor_url = os.getenv("PAYMENT_PROCESSOR_URL")
@@ -59,80 +62,44 @@ payment_queue = asyncio.Queue()
 workers = []
 
 
-def get_db_conn():
-    return sqlite3.connect(database_url, check_same_thread=False)
-
-
-def initialize_db():
-    db_path = database_url
-    if os.path.exists(db_path):
-        os.remove(db_path)  # just remove to ensure a fresh start
-    conn = get_db_conn()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS payments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            correlation_id TEXT NOT NULL,
-            amount REAL NOT NULL,
-            payment_processor TEXT NOT NULL,
-            requested_at TEXT NOT NULL
-        )
-        """
-    )
-    conn.commit()
-    conn.close()
-
-
-def register_payment_db(payment):
-    conn = get_db_conn()
-    cursor = conn.cursor()
-    cursor.execute(
-        """
-        INSERT INTO payments (correlation_id, amount, payment_processor, requested_at)
-        VALUES (?, ?, ?, ?)
-        """,
-        (
-            payment["correlation_id"],
-            payment["amount"],
-            payment["payment_processor"],
-            payment["requested_at"],
-        ),
-    )
-    conn.commit()
-    conn.close()
+async def register_payment_db(payment: Payment):
+    key = f"payment:{payment['correlation_id']}"
+    value = json.dumps(payment)  # noqa: F821
+    await redis_client.set(key, value)
+    await redis_client.zadd("payments_index", {payment["requested_at"]: datetime.fromisoformat(payment["requested_at"]).timestamp()})
+    await redis_client.rpush(f"payments:{payment['payment_processor']}", value)
     logging.info(
         f"Payment registered: {payment['correlation_id']} - {payment['amount']} using {payment['payment_processor']}"
     )
 
 
-def get_payments_summary(
-    from_date: datetime, to_date: datetime
-) -> PaymentsSummaryResponse:
-    conn = get_db_conn()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT COUNT(*), COALESCE(SUM(amount), 0) FROM payments WHERE payment_processor = 'default' AND requested_at BETWEEN ? AND ?",
-        (from_date.isoformat(), to_date.isoformat()),
-    )
-    default_summary = cursor.fetchone() or (0, 0.0)
+async def get_payments_summary(from_date: datetime, to_date: datetime) -> PaymentsSummaryResponse:
+    from_ts = from_date.timestamp()
+    to_ts = to_date.timestamp()
 
-    cursor.execute(
-        "SELECT COUNT(*), COALESCE(SUM(amount), 0) FROM payments WHERE payment_processor = 'fallback' AND requested_at BETWEEN ? AND ?",
-        (from_date.isoformat(), to_date.isoformat()),
-    )
-    fallback_summary = cursor.fetchone() or (0, 0.0)
+    async def get_summary_for(processor):
+        payments = await redis_client.lrange(f"payments:{processor}", 0, -1)
+        total_amount = 0
+        count = 0
+        for p in payments:
+            try:
+                payment = json.loads(p)
+                ts = datetime.fromisoformat(payment["requested_at"]).timestamp()
+                if from_ts <= ts <= to_ts:
+                    total_amount += payment["amount"]
+                    count += 1
+            except Exception:
+                continue
+        return BaseSummary(total_requests=count, total_amount=total_amount)
 
-    conn.close()
+    default_summary = await get_summary_for("default")
+    fallback_summary = await get_summary_for("fallback")
 
     return PaymentsSummaryResponse(
-        default=BaseSummary(
-            total_requests=default_summary[0], total_amount=default_summary[1]
-        ),
-        fallback=BaseSummary(
-            total_requests=fallback_summary[0], total_amount=fallback_summary[1]
-        ),
+        default=default_summary,
+        fallback=fallback_summary,
     )
+
 
 
 async def make_payment_request(payment_payload, max_attempts=10) -> str:
@@ -169,7 +136,7 @@ async def payment_worker():
                 requested_at=requested_at.isoformat(),
                 payment_processor=processor,
             )
-            register_payment_db(payment)
+            await register_payment_db(payment)
         except Exception as e:
             logging.error(f"Error processing payment request: {e}")
 
@@ -178,8 +145,7 @@ async def payment_worker():
 
 @contextlib.asynccontextmanager
 async def lifespan(app):
-    initialize_db()
-    num_workers = 4
+    num_workers = 20
     tasks = [asyncio.create_task(payment_worker()) for _ in range(num_workers)]
     app.state.worker_tasks = tasks
     yield
@@ -207,7 +173,7 @@ async def payments_summary(request):
             datetime.fromisoformat(from_str) if from_str else now - timedelta(days=30)
         )
         to_date = datetime.fromisoformat(to_str) if to_str else now
-        summary = get_payments_summary(from_date, to_date)
+        summary = await get_payments_summary(from_date, to_date)
     except msgspec.ValidationError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     return Response(content=encoder.encode(summary), media_type="application/json")

@@ -1,7 +1,7 @@
 build:
 	docker build -t gigi -f Dockerfile .
 
-compose:
+run:
 	docker compose up --build
 
 down:
