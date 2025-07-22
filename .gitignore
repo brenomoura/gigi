@@ -214,3 +214,5 @@ __marimo__/
 
 # sqlite
 src/data/gigi.db
+
+partial-results.json
