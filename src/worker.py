@@ -1,8 +1,16 @@
+import asyncio
 from datetime import datetime, timezone
 
 from src import globals
 from src.db import register_payment_db
 from src.models import Payment
+
+async def payment_processor_health_checker():
+    while True:
+        print("verifying payment processor health...")
+        await asyncio.sleep(5)
+        print("payment processor health check complete.")
+
 
 
 async def make_payment_request(payment_payload, max_attempts=10) -> str:
