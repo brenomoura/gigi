@@ -64,7 +64,16 @@ async def payments_summary(request):
     return Response(content=encoder.encode(summary), media_type="application/json")
 
 
+async def purge_payments(request):
+    try:
+        await globals.redis_client.flushdb()
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+    return JSONResponse({"msg": "payments purged"}, status_code=200)
+
+
 routes = [
     Route("/payments", payments, methods=["POST"]),
     Route("/payments-summary", payments_summary, methods=["GET"]),
+    Route("/purge-payments", purge_payments, methods=["POST"]),
 ]
