@@ -7,6 +7,7 @@ from starlette.routing import Route
 from src import globals
 from src.encoders import encoder, payment_decoder
 from src.models import BaseSummary, PaymentsSummaryResponse
+from src.utils import from_cents
 
 
 async def get_payments_summary(
@@ -31,7 +32,9 @@ async def get_payments_summary(
         return BaseSummary(total_requests=count, total_amount=total_amount)
 
     default_summary = await get_summary_for("default")
+    default_summary.total_amount = from_cents(default_summary.total_amount)
     fallback_summary = await get_summary_for("fallback")
+    fallback_summary.total_amount = from_cents(fallback_summary.total_amount)
 
     return PaymentsSummaryResponse(
         default=default_summary,

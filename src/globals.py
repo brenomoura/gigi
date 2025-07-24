@@ -16,7 +16,6 @@ def init_globals():
     global session
     global health_checker_session
     global payment_queue
-    global retry_payment_queue
     global logger
     global payment_processor_url
     global fallback_payment_processor_url
@@ -30,7 +29,6 @@ def init_globals():
         )
 
     payment_queue = asyncio.Queue()
-    retry_payment_queue = asyncio.Queue()
     session = aiohttp.ClientSession()
     health_checker_session = aiohttp.ClientSession()
     redis_client = redis.Redis(host="redis", port=6379, decode_responses=True)
