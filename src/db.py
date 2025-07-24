@@ -3,10 +3,12 @@ from datetime import datetime
 from src import globals
 from src.encoders import encoder
 from src.models import Payment
+from src.utils import to_cents
 
 
 async def register_payment_db(payment: Payment):
     key = f"payment:{payment['correlation_id']}"
+    payment["amount"] = to_cents(payment["amount"])
     value = encoder.encode(payment)
     async with globals.redis_client.pipeline() as pipe:
         await pipe.set(key, value)

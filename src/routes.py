@@ -7,6 +7,7 @@ from starlette.routing import Route
 from src import globals
 from src.encoders import encoder, payment_decoder
 from src.models import BaseSummary, PaymentsSummaryResponse
+from src.utils import from_cents
 
 
 async def get_payments_summary(
@@ -31,7 +32,9 @@ async def get_payments_summary(
         return BaseSummary(total_requests=count, total_amount=total_amount)
 
     default_summary = await get_summary_for("default")
+    default_summary.total_amount = from_cents(default_summary.total_amount)
     fallback_summary = await get_summary_for("fallback")
+    fallback_summary.total_amount = from_cents(fallback_summary.total_amount)
 
     return PaymentsSummaryResponse(
         default=default_summary,
@@ -64,7 +67,16 @@ async def payments_summary(request):
     return Response(content=encoder.encode(summary), media_type="application/json")
 
 
+async def purge_payments(request):
+    try:
+        await globals.redis_client.flushdb()
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+    return JSONResponse({"msg": "payments purged"}, status_code=200)
+
+
 routes = [
     Route("/payments", payments, methods=["POST"]),
     Route("/payments-summary", payments_summary, methods=["GET"]),
+    Route("/purge-payments", purge_payments, methods=["POST"]),
 ]
