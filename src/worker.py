@@ -127,4 +127,4 @@ async def process_payment(payment_request):
         globals.logger.error(
             f"Payment processing failed for {payment_request['correlationId']}: {payment_request}"
         )
-        pass
+        await globals.payment_queue.put(payment_request)
