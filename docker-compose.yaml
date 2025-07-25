@@ -16,16 +16,12 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.33"
-          memory: "98MB"
+          cpus: "0.50"
+          memory: "147MB"
 
   api02:
     <<: *api
     hostname: api02
-
-  api03:
-    <<: *api
-    hostname: api03
 
   redis:
     image: redis:7.2-alpine

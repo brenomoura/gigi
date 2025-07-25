@@ -1,9 +1,11 @@
 from datetime import datetime
 
+import msgspec
+
 from src import globals
 from src.encoders import encoder
-from src.models import Payment
-from src.utils import to_cents
+from src.models import BaseSummary, Payment, PaymentsSummaryResponse
+from src.utils import from_cents, to_cents
 
 
 async def register_payment_db(payment: Payment):
@@ -25,3 +27,37 @@ async def register_payment_db(payment: Payment):
     globals.logger.info(
         f"Payment registered: {payment['correlation_id']} - {payment['amount']} using {payment['payment_processor']}"
     )
+
+
+async def get_summary(from_date: datetime, to_date: datetime):
+    from_ts = from_date.timestamp()
+    to_ts = to_date.timestamp()
+
+    async def get_summary_for(processor):
+        payments = await globals.redis_client.lrange(f"payments:{processor}", 0, -1)
+        total_amount = 0
+        count = 0
+        for payment in payments:
+            try:
+                payment = msgspec.json.decode(payment)
+                ts = datetime.fromisoformat(payment["requested_at"]).timestamp()
+                if from_ts <= ts <= to_ts:
+                    total_amount += payment["amount"]
+                    count += 1
+            except Exception:
+                continue
+        return BaseSummary(total_requests=count, total_amount=total_amount)
+
+    default_summary = await get_summary_for("default")
+    default_summary.total_amount = from_cents(default_summary.total_amount)
+    fallback_summary = await get_summary_for("fallback")
+    fallback_summary.total_amount = from_cents(fallback_summary.total_amount)
+    return PaymentsSummaryResponse(
+        default=default_summary,
+        fallback=fallback_summary,
+    )
+
+
+async def purge_payments():
+    await globals.redis_client.flushdb()
+    globals.logger.info("Payments database purged.")

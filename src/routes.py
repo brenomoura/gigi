@@ -5,41 +5,12 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 from src import globals
+from src.db import get_summary
 from src.encoders import encoder, payment_decoder
-from src.models import BaseSummary, PaymentsSummaryResponse
-from src.utils import from_cents
 
 
-async def get_payments_summary(
-    from_date: datetime, to_date: datetime
-) -> PaymentsSummaryResponse:
-    from_ts = from_date.timestamp()
-    to_ts = to_date.timestamp()
-
-    async def get_summary_for(processor):
-        payments = await globals.redis_client.lrange(f"payments:{processor}", 0, -1)
-        total_amount = 0
-        count = 0
-        for payment in payments:
-            try:
-                payment = msgspec.json.decode(payment)
-                ts = datetime.fromisoformat(payment["requested_at"]).timestamp()
-                if from_ts <= ts <= to_ts:
-                    total_amount += payment["amount"]
-                    count += 1
-            except Exception:
-                continue
-        return BaseSummary(total_requests=count, total_amount=total_amount)
-
-    default_summary = await get_summary_for("default")
-    default_summary.total_amount = from_cents(default_summary.total_amount)
-    fallback_summary = await get_summary_for("fallback")
-    fallback_summary.total_amount = from_cents(fallback_summary.total_amount)
-
-    return PaymentsSummaryResponse(
-        default=default_summary,
-        fallback=fallback_summary,
-    )
+async def get_payments_summary(from_date: datetime, to_date: datetime):
+    return await get_summary(from_date, to_date)
 
 
 async def payments(request):
@@ -69,7 +40,9 @@ async def payments_summary(request):
 
 async def purge_payments(request):
     try:
+        last_health_check = await globals.redis_client.get("payment_processor_health") # gamb
         await globals.redis_client.flushdb()
+        await globals.redis_client.set("payment_processor_health", last_health_check) # iarra
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
     return JSONResponse({"msg": "payments purged"}, status_code=200)

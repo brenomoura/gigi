@@ -96,6 +96,9 @@ async def make_payment_request(payment_payload, processors, max_attempts=3) -> s
                     f"Payment request successful: {await response.json()}"
                 )
                 return processor
+            globals.logger.error(
+                f"Payment request failed for {processor}: {response.status} {await response.text()}"
+            )
             attempt += 1
     raise Exception("Both payment processors failed after multiple attempts.")
 
