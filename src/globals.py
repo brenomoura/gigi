@@ -15,6 +15,7 @@ def init_globals():
     global redis_client
     global session
     global health_checker_session
+    global cached_health_check
     global payment_queue
     global logger
     global payment_processor_url
@@ -31,5 +32,6 @@ def init_globals():
     payment_queue = asyncio.Queue()
     session = aiohttp.ClientSession()
     health_checker_session = aiohttp.ClientSession()
+    cached_health_check = None
     redis_client = redis.Redis(host="redis", port=6379, decode_responses=True)
     logger = logging.getLogger("gigi")

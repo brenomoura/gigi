@@ -8,8 +8,6 @@ services:
       - PAYMENT_PROCESSOR_URL=http://payment-processor-default:8080
       - FALLBACK_PAYMENT_PROCESSOR_URL=http://payment-processor-fallback:8080
       - NUM_WORKERS=10
-    volumes:
-      - gigi-db:/data
     networks:
       - payment-processor
       - rinha-net
@@ -18,12 +16,16 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.50"
-          memory: "147MB"
+          cpus: "0.33"
+          memory: "98MB"
 
   api02:
     <<: *api
     hostname: api02
+
+  api03:
+    <<: *api
+    hostname: api03
 
   redis:
     image: redis:7.2-alpine
@@ -65,7 +67,6 @@ services:
           memory: "25MB"
 
 volumes:
-  gigi-db:
   redis_data:
 
 networks:

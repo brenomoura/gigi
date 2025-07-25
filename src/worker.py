@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from src import globals
 from src.db import register_payment_db
-from src.encoders import encoder, health_check_decoder
+from src.encoders import health_check_decoder, encoder
 from src.models import Payment
 
 
@@ -30,6 +30,7 @@ async def payment_processor_health_checker():
         await globals.redis_client.set(
             "payment_processor_health", encoder.encode(last_health_check)
         )
+        globals.cached_health_check = last_health_check
         globals.logger.info(f"Health check updated: {last_health_check}")
         await asyncio.sleep(5)
 
@@ -49,11 +50,13 @@ async def make_health_check_request(payment_processor="default"):
 
 
 async def set_best_payment_processor():
-    raw_health_check = await globals.redis_client.get("payment_processor_health")
-    if not raw_health_check:
-        return ["default", "fallback"]
+    health_check = globals.cached_health_check
+    if not health_check:
+        raw_health_check = await globals.redis_client.get("payment_processor_health")
+        if not raw_health_check:
+            return ["default", "fallback"]
+        health_check = health_check_decoder.decode(raw_health_check)
 
-    health_check = health_check_decoder.decode(raw_health_check)
     globals.logger.info(f"Current health check: {health_check}")
     default = health_check.get("default")
     fallback = health_check.get("fallback")
@@ -66,7 +69,6 @@ async def set_best_payment_processor():
     elif fallback["failing"] and not default["failing"]:
         return ["default"]
     elif not default["failing"] and not fallback["failing"]:
-        # if default["minResponseTime"] <= 100 or default["minResponseTime"] <= fallback["minResponseTime"]:
         if default["minResponseTime"] <= fallback["minResponseTime"]:
             return ["default"]
 
@@ -109,9 +111,9 @@ async def payment_worker():
 
 async def process_payment(payment_request):
     requested_at = datetime.now(timezone.utc)
-    payment_request["requestedAt"] = requested_at.isoformat()
     try:
         processors = await set_best_payment_processor()
+        payment_request["requestedAt"] = requested_at.isoformat()
         payment_processor = await make_payment_request(
             payment_request, processors=processors
         )
