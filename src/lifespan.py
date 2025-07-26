@@ -3,7 +3,7 @@ import contextlib
 
 from src.db import purge_payments
 from src import globals
-from src.worker import (
+from src.workers import (
     payment_processor_health_checker,
     payment_worker,
 )

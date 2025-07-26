@@ -16,8 +16,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.50"
-          memory: "147MB"
+          cpus: "0.45"
+          memory: "142MB"
 
   api02:
     <<: *api
@@ -59,8 +59,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.1"
-          memory: "25MB"
+          cpus: "0.2"
+          memory: "35MB"
 
 volumes:
   redis_data:
