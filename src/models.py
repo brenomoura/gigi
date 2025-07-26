@@ -24,12 +24,3 @@ class Payment(TypedDict):
     amount: float
     requested_at: str  # ISO 8601 format
     payment_processor: str = "default"  # or "fallback"
-
-class BaseHealthCheckResponse(TypedDict):
-    failing: bool
-    timestamp: str  # ISO 8601 format
-    minResponseTime: float
-
-class HealthCheck(TypedDict):
-    default: BaseHealthCheckResponse
-    fallback: BaseHealthCheckResponse

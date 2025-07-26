@@ -8,6 +8,7 @@ load_dotenv()
 
 
 app = Starlette(
+    debug=True,
     routes=routes,
     lifespan=lifespan,
 )

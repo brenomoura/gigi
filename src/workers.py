@@ -1,82 +1,12 @@
 import asyncio
+import time
 from datetime import datetime, timezone
+
+import aiohttp
 
 from src import globals
 from src.db import register_payment_db
-from src.encoders import health_check_decoder, encoder
 from src.models import Payment
-
-
-async def payment_processor_health_checker():
-    while True:
-        last_health_check = await globals.redis_client.get("payment_processor_health")
-        if not last_health_check:
-            last_health_check = {
-                "default": None,
-                "fallback": None,
-            }
-        else:
-            last_health_check = health_check_decoder.decode(last_health_check)
-        try:
-            default_health = await make_health_check_request("default")
-            if default_health:
-                last_health_check["default"] = default_health
-            fallback_health = await make_health_check_request("fallback")
-            if fallback_health:
-                last_health_check["fallback"] = fallback_health
-        except Exception as e:
-            globals.logger.error(f"Health check failed: {e}")
-            continue
-        await globals.redis_client.set(
-            "payment_processor_health", encoder.encode(last_health_check)
-        )
-        globals.cached_health_check = last_health_check
-        globals.logger.info(f"Health check updated: {last_health_check}")
-        await asyncio.sleep(5)
-
-
-async def make_health_check_request(payment_processor="default"):
-    health_check_urls = {
-        "default": globals.payment_processor_url + "/payments/service-health",
-        "fallback": globals.fallback_payment_processor_url + "/payments/service-health",
-    }
-    async with globals.session.get(health_check_urls[payment_processor]) as response:
-        if response.status == 200:
-            health_check_value = await response.json()
-            health_check_value["timestamp"] = datetime.now(timezone.utc).isoformat()
-            return health_check_value
-        else:
-            return None
-
-
-async def set_best_payment_processor():
-    health_check = globals.cached_health_check
-    if not health_check:
-        raw_health_check = await globals.redis_client.get("payment_processor_health")
-        if not raw_health_check:
-            return "default"
-        health_check = health_check_decoder.decode(raw_health_check)
-
-    default = health_check.get("default")
-    fallback = health_check.get("fallback")
-
-    if not (default and fallback):
-        return "default"
-
-    if default["failing"] and not fallback["failing"]:
-        return "fallback"
-    elif fallback["failing"] and not default["failing"]:
-        return "default"
-    elif not default["failing"] and not fallback["failing"]:
-        if default["minResponseTime"] <= fallback["minResponseTime"]:
-            return "default"
-
-        if default["minResponseTime"] > fallback["minResponseTime"]:
-            return "fallback"
-
-        return "default"
-
-    return "default"
 
 
 async def make_payment_request(payment_payload, processor, max_attempts=3) -> str:
@@ -84,56 +14,88 @@ async def make_payment_request(payment_payload, processor, max_attempts=3) -> st
         "default": globals.payment_processor_url + "/payments",
         "fallback": globals.fallback_payment_processor_url + "/payments",
     }
-    attempt = 0
-    while attempt < max_attempts:
-        globals.logger.info(
-            f"Attempt {attempt + 1}: Sending payment request to {processor}"
-        )
-        async with globals.session.post(
-            urls[processor], json=payment_payload
-        ) as response:
-            if response.status == 200:
-                return processor
-            globals.logger.error(
-                f"Payment request failed for {processor}: {response.status} {await response.text()}"
-            )
-            attempt += 1
+    timeout_value = 1.0 if processor == "default" else 10.0
+    timeout = aiohttp.ClientTimeout(total=timeout_value)
+
+    start_time = time.perf_counter()
+    correlation_id = payment_payload.get("correlationId", "unknown")
+
+    for attempt in range(max_attempts):
+        attempt_start = time.perf_counter()
+
+        async with globals.payment_processor_semaphore:
+            try:
+                async with globals.session.post(
+                    urls[processor], json=payment_payload, timeout=timeout
+                ) as response:
+                    attempt_duration = time.perf_counter() - attempt_start
+
+                    if response.status == 200:
+                        total_duration = time.perf_counter() - start_time
+                        globals.logger.debug(
+                            f"Payment {correlation_id}: SUCCESS {processor} attempt {attempt + 1}/{max_attempts} in {attempt_duration:.3f}s (total: {total_duration:.3f}s)"
+                        )
+                        return processor
+                    else:
+                        globals.logger.warning(
+                            f"Payment {correlation_id}: {processor} returned status {response.status} in {attempt_duration:.3f}s (attempt {attempt + 1}/{max_attempts})"
+                        )
+
+            except Exception as e:
+                attempt_duration = time.perf_counter() - attempt_start
+                globals.logger.warning(
+                    f"Payment {correlation_id}: {processor} failed attempt {attempt + 1}/{max_attempts} in {attempt_duration:.3f}s: {type(e).__name__}"
+                )
+
+                if attempt == max_attempts - 1:
+                    break
+                await asyncio.sleep(0.1)
+
+    total_duration = time.perf_counter() - start_time
+
     if processor == "default":
-        return await make_payment_request(payment_payload, "fallback", max_attempts)
-    raise Exception("Both payment processors failed after multiple attempts.")
+        globals.logger.info(
+            f"Payment {correlation_id}: Default failed after {max_attempts} attempts in {total_duration:.3f}s, trying fallback"
+        )
+        return await make_payment_request(payment_payload, "fallback", 1)
+
+    globals.logger.error(
+        f"Payment {correlation_id}: Both processors failed in {total_duration:.3f}s"
+    )
+    raise Exception("Both payment processors failed")
 
 
 async def payment_worker():
     while True:
-        payment_request = await globals.payment_queue.get()
-        if payment_request is None:
-            break
-        await process_payment(payment_request)
-        globals.payment_queue.task_done()
+        await process_from_queue()
+
+
+async def process_from_queue():
+    payment_request = await globals.payment_queue.get()
+
+    if payment_request is None:
+        return
+
+    await process_payment(payment_request)
+    globals.payment_queue.task_done()
 
 
 async def process_payment(payment_request):
     requested_at = datetime.now(timezone.utc)
     try:
-        processors = await set_best_payment_processor()
         payment_request["requestedAt"] = requested_at.isoformat()
-
         payment_processor = await make_payment_request(
-            payment_request, processor=processors
+            payment_request, processor="default"
         )
 
         payment = Payment(
-            id=None,  # ID will be auto-generated by the database
+            id=None,
             correlation_id=payment_request["correlationId"],
             amount=payment_request["amount"],
             requested_at=requested_at.isoformat(),
             payment_processor=payment_processor,
         )
-
         await register_payment_db(payment)
 
     except Exception:
-        globals.logger.error(
-            f"Payment processing failed for {payment_request['correlationId']}: {payment_request}"
-        )
         await globals.payment_queue.put(payment_request)

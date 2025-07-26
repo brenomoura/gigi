@@ -7,7 +7,7 @@ services:
     environment:
       - PAYMENT_PROCESSOR_URL=http://payment-processor-default:8080
       - FALLBACK_PAYMENT_PROCESSOR_URL=http://payment-processor-fallback:8080
-      - NUM_WORKERS=10
+      - NUM_WORKERS=20
     networks:
       - payment-processor
       - rinha-net
@@ -17,7 +17,7 @@ services:
       resources:
         limits:
           cpus: "0.45"
-          memory: "142MB"
+          memory: "125MB"
 
   api02:
     <<: *api
@@ -42,7 +42,7 @@ services:
       resources:
         limits:
           cpus: "0.4"
-          memory: "30MB"
+          memory: "45MB"
 
   lb:
     image: nginx:1.27.0-alpine
@@ -60,7 +60,7 @@ services:
       resources:
         limits:
           cpus: "0.2"
-          memory: "35MB"
+          memory: "55MB"
 
 volumes:
   redis_data:

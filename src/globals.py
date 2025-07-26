@@ -6,7 +6,7 @@ import aiohttp
 import redis.asyncio as redis
 
 logging.basicConfig(
-    level=logging.INFO,  # Ou DEBUG, WARNING, ERROR
+    level=logging.DEBUG,  # Ou DEBUG, WARNING, ERROR
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 
@@ -14,6 +14,7 @@ logging.basicConfig(
 def init_globals():
     global redis_client
     global session
+    global payment_processor_semaphore
     global health_checker_session
     global cached_health_check
     global payment_queue
@@ -29,9 +30,14 @@ def init_globals():
             "PAYMENT_PROCESSOR_URL and FALLBACK_PAYMENT_PROCESSOR_URL must be set in the environment variables."
         )
 
-    payment_queue = asyncio.Queue()
+    payment_processor_semaphore = asyncio.Semaphore(num_workers)
+    payment_queue = asyncio.Queue(maxsize=15000)
     session = aiohttp.ClientSession()
     health_checker_session = aiohttp.ClientSession()
     cached_health_check = None
-    redis_client = redis.Redis(host="redis", port=6379, decode_responses=True)
+    redis_client = redis.Redis(
+        host="redis",
+        port=6379,
+        decode_responses=True,
+    )
     logger = logging.getLogger("gigi")
