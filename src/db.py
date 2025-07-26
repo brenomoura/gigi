@@ -9,19 +9,13 @@ from src.utils import from_cents, to_cents
 
 
 async def register_payment_db(payment: Payment):
-    key = f"payment:{payment['correlation_id']}"
     payment["amount"] = to_cents(payment["amount"])
     value = encoder.encode(payment)
     timestamp = datetime.fromisoformat(payment["requested_at"]).timestamp()
 
     async with globals.redis_client.pipeline() as pipe:
-        await pipe.set(key, value)
         await pipe.zadd(f"payments_index:{payment['payment_processor']}", {value: timestamp})
-        await pipe.rpush(f"payments:{payment['payment_processor']}", value)
         await pipe.execute()
-    globals.logger.info(
-        f"Payment registered: {payment['correlation_id']} - {payment['amount']} using {payment['payment_processor']}"
-    )
 
 
 async def get_summary(from_date: datetime, to_date: datetime):

@@ -33,5 +33,10 @@ def init_globals():
     session = aiohttp.ClientSession()
     health_checker_session = aiohttp.ClientSession()
     cached_health_check = None
-    redis_client = redis.Redis(host="redis", port=6379, decode_responses=True)
+    redis_client = redis.Redis(
+        host="redis",
+        port=6379,
+        decode_responses=True,
+        max_connections=10000,
+    )
     logger = logging.getLogger("gigi")

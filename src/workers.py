@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from src import globals
 from src.db import register_payment_db
-from src.encoders import health_check_decoder, encoder
+from src.encoders import encoder, health_check_decoder
 from src.models import Payment
 
 
@@ -31,7 +31,6 @@ async def payment_processor_health_checker():
             "payment_processor_health", encoder.encode(last_health_check)
         )
         globals.cached_health_check = last_health_check
-        globals.logger.info(f"Health check updated: {last_health_check}")
         await asyncio.sleep(5)
 
 
@@ -79,24 +78,19 @@ async def set_best_payment_processor():
     return "default"
 
 
-async def make_payment_request(payment_payload, processor, max_attempts=3) -> str:
+async def make_payment_request(payment_payload, processor, max_attempts=5) -> str:
     urls = {
         "default": globals.payment_processor_url + "/payments",
         "fallback": globals.fallback_payment_processor_url + "/payments",
     }
     attempt = 0
     while attempt < max_attempts:
-        globals.logger.info(
-            f"Attempt {attempt + 1}: Sending payment request to {processor}"
-        )
         async with globals.session.post(
-            urls[processor], json=payment_payload
+            urls[processor],
+            json=payment_payload,
         ) as response:
             if response.status == 200:
                 return processor
-            globals.logger.error(
-                f"Payment request failed for {processor}: {response.status} {await response.text()}"
-            )
             attempt += 1
     if processor == "default":
         return await make_payment_request(payment_payload, "fallback", max_attempts)
@@ -133,7 +127,4 @@ async def process_payment(payment_request):
         await register_payment_db(payment)
 
     except Exception:
-        globals.logger.error(
-            f"Payment processing failed for {payment_request['correlationId']}: {payment_request}"
-        )
         await globals.payment_queue.put(payment_request)
