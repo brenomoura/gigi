@@ -12,16 +12,11 @@ async def register_payment_db(payment: Payment):
     key = f"payment:{payment['correlation_id']}"
     payment["amount"] = to_cents(payment["amount"])
     value = encoder.encode(payment)
+    timestamp = datetime.fromisoformat(payment["requested_at"]).timestamp()
+
     async with globals.redis_client.pipeline() as pipe:
         await pipe.set(key, value)
-        await pipe.zadd(
-            "payments_index",
-            {
-                payment["requested_at"]: datetime.fromisoformat(
-                    payment["requested_at"]
-                ).timestamp()
-            },
-        )
+        await pipe.zadd(f"payments_index:{payment['payment_processor']}", {value: timestamp})
         await pipe.rpush(f"payments:{payment['payment_processor']}", value)
         await pipe.execute()
     globals.logger.info(
@@ -34,18 +29,21 @@ async def get_summary(from_date: datetime, to_date: datetime):
     to_ts = to_date.timestamp()
 
     async def get_summary_for(processor):
-        payments = await globals.redis_client.lrange(f"payments:{processor}", 0, -1)
+        payment_scores = await globals.redis_client.zrangebyscore(
+            f"payments_index:{processor}", from_ts, to_ts, withscores=True
+        )
+
         total_amount = 0
-        count = 0
-        for payment in payments:
+        count = len(payment_scores)
+
+        for payment_data, _ in payment_scores:
             try:
-                payment = msgspec.json.decode(payment)
-                ts = datetime.fromisoformat(payment["requested_at"]).timestamp()
-                if from_ts <= ts <= to_ts:
-                    total_amount += payment["amount"]
-                    count += 1
+                payment = msgspec.json.decode(payment_data)
+                total_amount += payment["amount"]
             except Exception:
+                count -= 1
                 continue
+
         return BaseSummary(total_requests=count, total_amount=total_amount)
 
     default_summary = await get_summary_for("default")
